@@ -11,7 +11,9 @@ func main() {
 	defer db.Close()
 
 	r := gin.Default()
-
+	r.GET("/health", func(c *gin.Context) {
+    c.JSON(200, gin.H{"status": "ok"})
+})
 	r.GET("/posts", func(c *gin.Context) { GetPosts(c, db) })
 	r.POST("/posts", func(c *gin.Context) { CreatePost(c, db) })
 	r.PUT("/posts/:id", func(c *gin.Context) { UpdatePost(c, db) })
