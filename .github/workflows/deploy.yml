@@ -126,10 +126,19 @@ jobs:
             echo "---"
           done
 
-      - name: Test API health endpoint
-        run: |                             # Проверяем /health эндпоинт приложения
-          echo "🌍 Testing API endpoint..."
-          curl -vk --retry 5 --retry-delay 10 https://simplecrud.compnet.kz/health | grep '"status":"ok"'
+      - name: Wait for Ingress to be ready
+        run: |                             # Делаем несколько попыток curl к Ingress
+          echo "⏳ Waiting for Ingress endpoint..."
+          for i in {1..30}; do
+            if curl -sk https://simplecrud.compnet.kz/health | grep '"status":"ok"'; then
+              echo "✅ API is healthy"
+              exit 0
+            fi
+            echo "Retry $i: not ready yet..."
+            sleep 10
+          done
+          echo "❌ API did not become ready in time"
+          exit 1
 
       - name: Show Ingress and endpoints
         run: |                             # Отладка: показываем ingress, сервисы и pod'ы
