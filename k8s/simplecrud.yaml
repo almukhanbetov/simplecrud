@@ -5,77 +5,91 @@ metadata:
   name: simplecrud-db-secret    # Имя секрета
   namespace: default            # Namespace, где будет создан
 type: Opaque                    # Тип "произвольные данные"
-stringData:
+stringData:                     # Данные в виде строк (kubectl сам преобразует в base64)
   DATABASE_URL: "postgres://postgres:Zxcvbnm123@postgres:5432/simplecrud?sslmode=disable"
   # Здесь хранится строка подключения к Postgres (логин, пароль, хост, порт, БД)
 
 ---
 # ====================== Deployment ======================
 apiVersion: apps/v1             # API для Deployment
-kind: Deployment
+kind: Deployment                # Ресурс Deployment для управления Pod'ами
 metadata:
   name: simplecrud              # Имя деплоймента
-  namespace: default
+  namespace: default            # Namespace, где создаётся деплоймент
 spec:
-  replicas: 1                   # Запускаем 1 Pod (можно масштабировать)
-  selector:
+  replicas: 1                   # Запускаем 1 Pod (можно увеличить для масштабирования)
+  selector:                     # Селектор указывает, какие Pod'ы управляются этим Deployment
     matchLabels:
-      app: simplecrud           # Метка для поиска Pod'ов
-  template:
+      app: simplecrud           # Поиск Pod'ов с меткой app=simplecrud
+  template:                     # Шаблон Pod'а
     metadata:
       labels:
-        app: simplecrud         # У Pod'ов будет метка app=simplecrud
+        app: simplecrud         # Метка Pod'а — используется сервисом для поиска
     spec:
-      containers:
+      containers:               # Список контейнеров внутри Pod
         - name: app             # Имя контейнера
-          image: almuko/simplecrud:latest   # Docker-образ из Docker Hub
+          image: almuko/simplecrud:${IMAGE_TAG}   # ⚡ Docker-образ с подстановкой SHA (заменяется в CI/CD)
           ports:
             - containerPort: 8080           # Приложение слушает порт 8080 внутри контейнера
           env:                              # Переменные окружения
-            - name: DATABASE_URL            # Имя переменной в контейнере
-              valueFrom:
-                secretKeyRef:               # Берём значение из секрета
+            - name: DATABASE_URL            # Имя переменной внутри контейнера
+              valueFrom:                    # Берём значение из секрета
+                secretKeyRef:
                   name: simplecrud-db-secret # Из этого секрета
-                  key: DATABASE_URL          # Берём именно ключ DATABASE_URL
+                  key: DATABASE_URL          # Ключ внутри секрета
+          readinessProbe:                   # ✅ Проверка готовности Pod принимать трафик
+            httpGet:                        # Проверка через HTTP-запрос
+              path: /health                 # URL внутри контейнера для проверки
+              port: 8080                    # Порт контейнера
+            initialDelaySeconds: 5          # Ждём 5 секунд после старта перед первой проверкой
+            periodSeconds: 10               # Проверять каждые 10 секунд
+            failureThreshold: 3             # После 3 неудач Pod будет "NotReady"
+          livenessProbe:                    # ✅ Проверка живости Pod
+            httpGet:
+              path: /health                 # Проверяем тот же эндпоинт
+              port: 8080
+            initialDelaySeconds: 15         # Ждём 15 секунд перед первой проверкой
+            periodSeconds: 20               # Проверяем каждые 20 секунд
+            failureThreshold: 3             # После 3 неудач Pod будет перезапущен
 
 ---
 # ====================== Service ======================
 apiVersion: v1
-kind: Service
+kind: Service                       # Ресурс Service — прокидывает доступ к Pod'ам
 metadata:
-  name: simplecrud              # Имя сервиса
+  name: simplecrud                  # Имя сервиса
   namespace: default
 spec:
   selector:
-    app: simplecrud             # Сервис отправляет трафик на Pod'ы с этой меткой
+    app: simplecrud                 # Service ищет Pod'ы с этой меткой
   ports:
-    - port: 80                  # Порт сервиса внутри кластера
-      targetPort: 8080          # На какой порт Pod'а пробрасывать (тот, что в контейнере)
-  type: ClusterIP               # Доступен только внутри кластера (Ingress потом вынесет наружу)
+    - port: 80                      # Порт сервиса внутри кластера
+      targetPort: 8080              # Пробрасываем на порт приложения внутри Pod
+  type: ClusterIP                   # ClusterIP — доступ только внутри кластера (Ingress вынесет наружу)
 
 ---
 # ====================== Ingress ======================
 apiVersion: networking.k8s.io/v1
-kind: Ingress
+kind: Ingress                       # Ресурс Ingress — доступ снаружи через Traefik
 metadata:
-  name: simplecrud-ingress      # Имя Ingress
+  name: simplecrud-ingress          # Имя ingress
   namespace: default
   annotations:
-    kubernetes.io/ingress.class: traefik       # Указываем, что используем Traefik как ingress-controller
-    cert-manager.io/cluster-issuer: letsencrypt-prod  # Cert-manager будет выдавать Let's Encrypt сертификат
+    kubernetes.io/ingress.class: traefik       # Указываем ingress-controller (Traefik)
+    cert-manager.io/cluster-issuer: letsencrypt-prod  # Автоматический TLS сертификат Let's Encrypt
 spec:
   tls:
     - hosts:
-        - simplecrud.compnet.kz  # Домен, для которого нужен TLS
-      secretName: simplecrud-tls # Секрет, куда cert-manager сохранит TLS-сертификат
+        - simplecrud.compnet.kz     # Домен, для которого выпускается сертификат
+      secretName: simplecrud-tls    # Секрет, куда cert-manager сохранит сертификат
   rules:
-    - host: simplecrud.compnet.kz # Правило для хоста
+    - host: simplecrud.compnet.kz   # Хост, на который действует правило
       http:
         paths:
-          - path: /               # Все запросы по этому пути
-            pathType: Prefix
+          - path: /                 # Все пути на домене
+            pathType: Prefix        # Совпадение по префиксу пути
             backend:
               service:
-                name: simplecrud  # Направляются на сервис simplecrud
+                name: simplecrud    # Трафик направляется в сервис simplecrud
                 port:
-                  number: 80      # Через его порт 80
+                  number: 80        # На порт 80 сервиса (а тот пробросит на 8080 Pod'а)
