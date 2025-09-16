@@ -25,9 +25,9 @@ jobs:
         with:
           context: .                        # Контекст сборки — текущая папка
           push: true                        # Публикуем образ в Docker Hub
-          tags: |                           # Несколько тегов
-            ${{ env.IMAGE_NAME }}:latest    # latest (для простоты)
-            ${{ env.IMAGE_NAME }}:${{ github.sha }}  # тег по SHA коммита (уникальный)
+          tags: |
+            ${{ env.IMAGE_NAME }}:latest
+            ${{ env.IMAGE_NAME }}:${{ github.sha }}  
 
   deploy:                                  # Джоб: деплой в Kubernetes
     runs-on: ubuntu-latest
