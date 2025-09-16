@@ -1,0 +1,81 @@
+# ====================== Secret ======================
+apiVersion: v1                  # Используется API v1 для Secret
+kind: Secret                    # Ресурс — секрет (для хранения чувствительных данных)
+metadata:
+  name: simplecrud-db-secret    # Имя секрета
+  namespace: default            # Namespace, где будет создан
+type: Opaque                    # Тип "произвольные данные"
+stringData:
+  DATABASE_URL: "postgres://postgres:Zxcvbnm123@postgres:5432/simplecrud?sslmode=disable"
+  # Здесь хранится строка подключения к Postgres (логин, пароль, хост, порт, БД)
+
+---
+# ====================== Deployment ======================
+apiVersion: apps/v1             # API для Deployment
+kind: Deployment
+metadata:
+  name: simplecrud              # Имя деплоймента
+  namespace: default
+spec:
+  replicas: 1                   # Запускаем 1 Pod (можно масштабировать)
+  selector:
+    matchLabels:
+      app: simplecrud           # Метка для поиска Pod'ов
+  template:
+    metadata:
+      labels:
+        app: simplecrud         # У Pod'ов будет метка app=simplecrud
+    spec:
+      containers:
+        - name: app             # Имя контейнера
+          image: almuko/simplecrud:latest   # Docker-образ из Docker Hub
+          ports:
+            - containerPort: 8080           # Приложение слушает порт 8080 внутри контейнера
+          env:                              # Переменные окружения
+            - name: DATABASE_URL            # Имя переменной в контейнере
+              valueFrom:
+                secretKeyRef:               # Берём значение из секрета
+                  name: simplecrud-db-secret # Из этого секрета
+                  key: DATABASE_URL          # Берём именно ключ DATABASE_URL
+
+---
+# ====================== Service ======================
+apiVersion: v1
+kind: Service
+metadata:
+  name: simplecrud              # Имя сервиса
+  namespace: default
+spec:
+  selector:
+    app: simplecrud             # Сервис отправляет трафик на Pod'ы с этой меткой
+  ports:
+    - port: 80                  # Порт сервиса внутри кластера
+      targetPort: 8080          # На какой порт Pod'а пробрасывать (тот, что в контейнере)
+  type: ClusterIP               # Доступен только внутри кластера (Ingress потом вынесет наружу)
+
+---
+# ====================== Ingress ======================
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: simplecrud-ingress      # Имя Ingress
+  namespace: default
+  annotations:
+    kubernetes.io/ingress.class: traefik       # Указываем, что используем Traefik как ingress-controller
+    cert-manager.io/cluster-issuer: letsencrypt-prod  # Cert-manager будет выдавать Let's Encrypt сертификат
+spec:
+  tls:
+    - hosts:
+        - simplecrud.compnet.kz  # Домен, для которого нужен TLS
+      secretName: simplecrud-tls # Секрет, куда cert-manager сохранит TLS-сертификат
+  rules:
+    - host: simplecrud.compnet.kz # Правило для хоста
+      http:
+        paths:
+          - path: /               # Все запросы по этому пути
+            pathType: Prefix
+            backend:
+              service:
+                name: simplecrud  # Направляются на сервис simplecrud
+                port:
+                  number: 80      # Через его порт 80

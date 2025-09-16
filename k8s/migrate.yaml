@@ -1,0 +1,41 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: simplecrud-migrate        # имя Job (kubectl будет искать его именно так)
+  namespace: default             # namespace, где будет запускаться
+spec:
+  backoffLimit: 3                # кол-во попыток перезапуска при ошибке
+  ttlSecondsAfterFinished: 60    # автоудаление Job через 60 секунд после завершения
+  template:
+    spec:
+      restartPolicy: Never       # Pod выполняется один раз, без перезапуска
+
+      # --- InitContainer: ждём пока Postgres станет доступен ---
+      initContainers:
+        - name: wait-for-postgres
+          image: postgres:17-alpine   # используем официальный образ Postgres
+          command:
+            - sh
+            - -c
+            - |
+              # ждём пока Postgres примет соединения
+              until pg_isready -h postgres -p 5432 -U postgres; do
+                echo "⏳ waiting for postgres..."
+                sleep 2
+              done
+              echo "✅ Postgres is up!"
+
+      # --- Основной контейнер: выполняем миграции через goose ---
+      containers:
+        - name: migrate
+          image: almuko/simplecrud:latest   # твой собранный образ из CI/CD
+          workingDir: /app                 # рабочая папка внутри контейнера
+          command: ["sh", "-c", "goose -dir ./migrations postgres \"$DATABASE_URL\" up"]
+
+          # Переменные окружения из Kubernetes Secret
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: simplecrud-db-secret   # secret, который хранит подключение к БД
+                  key: DATABASE_URL

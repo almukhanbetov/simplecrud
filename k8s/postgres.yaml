@@ -1,0 +1,64 @@
+# ====================== Secret ======================
+apiVersion: v1                      # API-версия для Secret
+kind: Secret                        # Ресурс Secret (для хранения паролей и конфигов)
+metadata:
+  name: postgres-secret             # Имя секрета
+  namespace: default                # Namespace (по умолчанию "default")
+type: Opaque                        # Тип: произвольные ключ-значения
+stringData:                         # Данные в виде строк (kubectl сам преобразует в base64)
+  POSTGRES_USER: postgres           # Логин для базы
+  POSTGRES_PASSWORD: Zxcvbnm123     # Пароль для базы
+  POSTGRES_DB: simplecrud           # Имя базы данных, которая создастся при старте контейнера
+
+
+# ====================== StatefulSet ======================
+apiVersion: apps/v1                 # API для StatefulSet
+kind: StatefulSet                   # Ресурс StatefulSet (лучше для баз данных, чем Deployment)
+metadata:
+  name: postgres                    # Имя StatefulSet
+  namespace: default
+spec:
+  serviceName: "postgres"           # Имя headless-сервиса, нужен для стабильных DNS-имен pod'ов
+  replicas: 1                       # Количество реплик (для Postgres лучше 1, если без репликации)
+  selector:
+    matchLabels:
+      app: postgres                 # StatefulSet будет управлять Pod'ами с меткой app=postgres
+  template:                         # Шаблон Pod'а
+    metadata:
+      labels:
+        app: postgres               # Метка Pod'а
+    spec:
+      containers:
+        - name: postgres            # Имя контейнера
+          image: postgres:17-alpine # Используем официальный образ Postgres 17 на Alpine
+          ports:
+            - containerPort: 5432   # Порт Postgres внутри контейнера
+          envFrom:                  # Подгружаем переменные окружения из секрета
+            - secretRef:
+                name: postgres-secret  # Секрет с паролем и настройками
+          volumeMounts:             # Подключение хранилища
+            - name: postgres-data   # Имя PVC, который описан ниже
+              mountPath: /var/lib/postgresql/data
+              # В этой директории Postgres хранит данные
+  volumeClaimTemplates:             # Шаблон для PVC (PersistentVolumeClaim)
+    - metadata:
+        name: postgres-data         # Имя PVC
+      spec:
+        accessModes: [ "ReadWriteOnce" ] # Доступ только с одного узла
+        resources:
+          requests:
+            storage: 1Gi            # Запрашиваем 1 ГБ хранилища
+
+
+# ====================== Service ======================
+apiVersion: v1
+kind: Service                       # Ресурс Service
+metadata:
+  name: postgres                    # Имя сервиса
+  namespace: default
+spec:
+  selector:
+    app: postgres                   # Сервис будет перенаправлять трафик на Pod'ы с меткой app=postgres
+  ports:
+    - port: 5432                    # Порт сервиса (ClusterIP)
+      targetPort: 5432              # На какой порт Pod'а отправлять трафик
