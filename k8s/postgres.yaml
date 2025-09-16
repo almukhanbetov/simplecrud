@@ -4,61 +4,59 @@ kind: Secret                        # Ресурс Secret (для хранени
 metadata:
   name: postgres-secret             # Имя секрета
   namespace: default                # Namespace (по умолчанию "default")
-type: Opaque                        # Тип: произвольные ключ-значения
-stringData:                         # Данные в виде строк (kubectl сам преобразует в base64)
-  POSTGRES_USER: postgres           # Логин для базы
-  POSTGRES_PASSWORD: Zxcvbnm123     # Пароль для базы
-  POSTGRES_DB: simplecrud           # Имя базы данных, которая создастся при старте контейнера
-
-
+type: Opaque                        # Тип секрета — произвольные ключ-значения
+stringData:                         # Поле для хранения строк (kubectl сам преобразует в base64)
+  POSTGRES_USER: postgres           # Логин для БД
+  POSTGRES_PASSWORD: Zxcvbnm123     # Пароль для БД
+  POSTGRES_DB: simplecrud           # Имя базы данных
+---
 # ====================== StatefulSet ======================
 apiVersion: apps/v1                 # API для StatefulSet
-kind: StatefulSet                   # Ресурс StatefulSet (лучше для баз данных, чем Deployment)
+kind: StatefulSet                   # StatefulSet — устойчивый набор Pod'ов
 metadata:
   name: postgres                    # Имя StatefulSet
-  namespace: default
+  namespace: default                # Namespace
 spec:
-  serviceName: "postgres"           # Имя headless-сервиса, нужен для стабильных DNS-имен pod'ов
-  replicas: 1                       # Количество реплик (для Postgres лучше 1, если без репликации)
+  serviceName: "postgres"           # Headless Service для Pod DNS
+  replicas: 1                       # Количество Pod'ов (1, если без репликации)
   selector:
     matchLabels:
-      app: postgres                 # StatefulSet будет управлять Pod'ами с меткой app=postgres
+      app: postgres                 # StatefulSet управляет Pod'ами с этой меткой
   template:                         # Шаблон Pod'а
     metadata:
       labels:
-        app: postgres               # Метка Pod'а
+        app: postgres               # Метка для Pod'а
     spec:
       containers:
         - name: postgres            # Имя контейнера
-          image: postgres:17-alpine # Используем официальный образ Postgres 17 на Alpine
+          image: postgres:17-alpine # Образ PostgreSQL (лёгкий alpine)
           ports:
-            - containerPort: 5432   # Порт Postgres внутри контейнера
-          envFrom:                  # Подгружаем переменные окружения из секрета
+            - containerPort: 5432   # Порт внутри контейнера
+          envFrom:                  # Переменные окружения из секрета
             - secretRef:
-                name: postgres-secret  # Секрет с паролем и настройками
-          volumeMounts:             # Подключение хранилища
-            - name: postgres-data   # Имя PVC, который описан ниже
+                name: postgres-secret
+          volumeMounts:             # Подключение тома
+            - name: postgres-data   # Имя PVC (снизу)
               mountPath: /var/lib/postgresql/data
-              # В этой директории Postgres хранит данные
-  volumeClaimTemplates:             # Шаблон для PVC (PersistentVolumeClaim)
+              # В этой директории PostgreSQL хранит данные
+  volumeClaimTemplates:             # Шаблон PVC для хранения данных
     - metadata:
         name: postgres-data         # Имя PVC
       spec:
-        accessModes: [ "ReadWriteOnce" ] # Доступ только с одного узла
+        accessModes: [ "ReadWriteOnce" ] # Доступ с одного узла
         resources:
           requests:
-            storage: 1Gi            # Запрашиваем 1 ГБ хранилища
-
-
+            storage: 1Gi            # Запрашиваемое хранилище (1ГБ)
+---
 # ====================== Service ======================
-apiVersion: v1
-kind: Service                       # Ресурс Service
+apiVersion: v1                      # API для Service
+kind: Service                       # Сервис для доступа к Pod'ам
 metadata:
   name: postgres                    # Имя сервиса
-  namespace: default
+  namespace: default                # Namespace
 spec:
   selector:
-    app: postgres                   # Сервис будет перенаправлять трафик на Pod'ы с меткой app=postgres
+    app: postgres                   # Сервис будет перенаправлять на Pod'ы с меткой app=postgres
   ports:
-    - port: 5432                    # Порт сервиса (ClusterIP)
-      targetPort: 5432              # На какой порт Pod'а отправлять трафик
+    - port: 5432                    # Порт сервиса внутри кластера
+      targetPort: 5432              # Порт контейнера внутри Pod'а

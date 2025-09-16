@@ -2,58 +2,63 @@ name: CI/CD Deploy simplecrud          # Название пайплайна (в
 
 on:
   push:
-    branches: [ "main" ]              # Триггер: запускать при пуше в ветку main
+    branches: [ "main" ]               # Триггер: запускать при пуше в ветку main
 
 env:
-  IMAGE_NAME: almuko/simplecrud        # Имя образа в Docker Hub
+  IMAGE_NAME: almuko/simplecrud        # Имя Docker-образа (в Docker Hub)
 
 jobs:
-  build-and-push:                     # Джоб: сборка и публикация Docker-образа
-    runs-on: ubuntu-latest            # Запускаем на виртуалке Ubuntu
+  build-and-push:                      # Джоб: сборка и публикация Docker-образа
+    runs-on: ubuntu-latest             # Виртуальная машина Ubuntu
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3     # Клонируем код из репозитория
+        uses: actions/checkout@v3      # Забираем код из репозитория
 
       - name: Log in to Docker Hub
-        uses: docker/login-action@v2  # Логинимся в Docker Hub
+        uses: docker/login-action@v2   # Логинимся в Docker Hub
         with:
-          username: ${{ secrets.DOCKER_USERNAME }}   # Из GitHub Secrets
-          password: ${{ secrets.DOCKER_PASSWORD }}
+          username: ${{ secrets.DOCKER_USERNAME }}   # Логин из GitHub Secrets
+          password: ${{ secrets.DOCKER_PASSWORD }}   # Пароль из GitHub Secrets
 
       - name: Build and Push Docker Image
-        uses: docker/build-push-action@v4  # Собираем и пушим образ
+        uses: docker/build-push-action@v4  # Сборка и публикация образа
         with:
-          context: .                       # Контекст — текущая папка
-          push: true                       # Пушим в Docker Hub
+          context: .                        # Контекст сборки — текущая папка
+          push: true                        # Загружаем образ в Docker Hub
           tags: 
-            ${{ env.IMAGE_NAME }}:latest   # Тег latest
+            ${{ env.IMAGE_NAME }}:latest    # Имя и тег образа (latest)
 
-  deploy:                                 # Джоб: деплой в Kubernetes
+  deploy:                                  # Джоб: деплой в Kubernetes
     runs-on: ubuntu-latest
-    needs: build-and-push                 # Зависимость: выполняется после build-and-push
+    needs: build-and-push                  # Зависимость: запуск только после сборки
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v3         # Клонируем код снова (нужны манифесты)
+        uses: actions/checkout@v3          # Ещё раз клонируем репозиторий (нужны YAML манифесты)
 
       - name: Install kubectl
-        uses: azure/setup-kubectl@v4      # Устанавливаем kubectl
+        uses: azure/setup-kubectl@v4       # Устанавливаем kubectl
         with:
-          version: latest
+          version: latest                  # Берём последнюю стабильную версию
 
       - name: Setup Kubeconfig
         shell: bash
-        run: |                            # Записываем kubeconfig из GitHub Secret
+        run: |                             # Настраиваем kubeconfig из GitHub Secrets
           mkdir -p "$HOME/.kube"
           cat > "$HOME/.kube/config" <<'EOF'
           ${{ secrets.KUBECONFIG }}
           EOF
 
+      - name: Install cert-manager
+        run: |                             # Устанавливаем cert-manager в кластер
+          kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.14.5/cert-manager.yaml
+          kubectl rollout status deployment/cert-manager -n cert-manager --timeout=180s      
+
       - name: Deploy ClusterIssuer (Let's Encrypt)
         run: kubectl apply --validate=false -f k8s/cluster-issuer.yaml
-        # Настраиваем ClusterIssuer для cert-manager (Let's Encrypt)
+        # Подключаем ClusterIssuer для автоматического выпуска TLS сертификатов (Let's Encrypt)
 
       - name: Deploy Postgres (only if not exists)
-        run: |                            # Поднимаем Postgres, если его ещё нет
+        run: |                             # Поднимаем Postgres, если ещё не создан
           if ! kubectl get statefulset postgres -n default >/dev/null 2>&1; then
             echo "Postgres not found. Creating..."
             kubectl apply -f k8s/postgres.yaml
@@ -63,13 +68,13 @@ jobs:
           fi
 
       - name: Recreate simplecrud-db-secret
-        run: |                            # Обновляем секрет с DATABASE_URL
+        run: |                             # Обновляем секрет с DATABASE_URL
           kubectl delete secret simplecrud-db-secret -n default --ignore-not-found
           kubectl create secret generic simplecrud-db-secret \
             --from-literal=DATABASE_URL='postgres://postgres:Zxcvbnm123@postgres:5432/simplecrud?sslmode=disable'
 
       - name: Cleanup old migration job and pods
-        run: |                            # Чистим старый Job для миграций и его Pod'ы
+        run: |                             # Чистим старый Job для миграций и его Pod'ы
           if kubectl get job simplecrud-migrate -n default >/dev/null 2>&1; then
             echo "🗑 Deleting old migration job..."
             kubectl delete job simplecrud-migrate -n default
@@ -80,7 +85,7 @@ jobs:
           done
 
       - name: Run migrations Job
-        run: |                            # Запускаем Job для миграций
+        run: |                             # Запускаем Job для миграций
           kubectl apply -f k8s/migrate.yaml
           echo "⏳ Waiting for migrations to complete..."
           if ! kubectl wait --for=condition=complete job/simplecrud-migrate -n default --timeout=600s; then
@@ -99,35 +104,35 @@ jobs:
 
       - name: Deploy App (Deployment + Service + Ingress)
         run: kubectl apply -f k8s/simplecrud.yaml
-        # Деплой самого приложения (манифест содержит Deployment, Service, Ingress)
+        # Деплой приложения (Deployment, Service и Ingress для доступа снаружи)
 
       - name: Wait for app rollout
         run: kubectl rollout status deployment/simplecrud -n default --timeout=180s
-        # Ждём пока приложение полностью задеплоится
+        # Ждём пока деплоймент завершится
 
       - name: Wait for TLS certificate
-        run: |                            # Ждём выпуск сертификата Let's Encrypt
+        run: |                             # Ждём выпуск TLS сертификата Let's Encrypt
           echo "⏳ Waiting for TLS certificate simplecrud-tls..."
           kubectl wait --for=condition=Ready certificate/simplecrud-tls -n default --timeout=300s || \
             (echo "❌ TLS certificate was not issued" && kubectl describe certificate/simplecrud-tls -n default && exit 1)
 
-      - name: Debug protoapp pods if rollout fails
-        if: failure()                     # Если деплой упал, выводим логи Pod'ов
+      - name: Debug simplecrud pods if rollout fails
+        if: failure()                      # Если деплой упал — выводим логи Pod'ов
         run: |
           kubectl get pods -n default
-          for pod in $(kubectl get pods -n default -l app=protoapp -o jsonpath='{.items[*].metadata.name}'); do
+          for pod in $(kubectl get pods -n default -l app=simplecrud -o jsonpath='{.items[*].metadata.name}'); do
             echo "Logs from $pod"
             kubectl logs -n default $pod --tail=50 || true
             echo "---"
           done
 
       - name: Test API health endpoint
-        run: |                            # Проверяем /health эндпоинт
+        run: |                             # Проверяем /health эндпоинт приложения
           echo "🌍 Testing API endpoint..."
           curl -vk --retry 5 --retry-delay 10 https://simplecrud.compnet.kz/health | grep '"status":"ok"'
 
       - name: Show Ingress and endpoints
-        run: |                            # Отладка: показываем ingress, сервисы, pod'ы
+        run: |                             # Отладка: показываем ingress, сервисы и pod'ы
           kubectl get ingress -n default
           kubectl get svc -n default
           kubectl get pods -o wide -n default
