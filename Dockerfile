@@ -15,8 +15,7 @@ RUN go install github.com/pressly/goose/v3/cmd/goose@latest
 COPY . .
 
 # Собираем бинарь приложения
-RUN go build -o simplecrud ./main.go
-
+RUN go build -o simplecrud .
 
 # ---------------------------
 # Stage 2: runtime
